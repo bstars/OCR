@@ -11,6 +11,7 @@ from torch.utils.data import Dataset, DataLoader
 from skimage.transform import resize
 from torch.nn.utils.rnn import pad_sequence
 import torch.nn.functional as F
+from torchvision import transforms
 
 from recognition.tokenizer import Tokenizer
 from config import RecognitionConfig, Config
@@ -21,12 +22,21 @@ class PublicDataset(Dataset):
 	Reshape the image to have a fixed height of Config.H
 	Different image may have different widths, we will pad them to the same width as the widest image
 	"""
-	def __init__(self):
+	def __init__(self, tokenizer:Tokenizer, split='train'):
 		self.path = '../datasets/ocr-datasets/public_dataset'
-		self.tokenizer = Tokenizer(RecognitionConfig.TOKENIZER_PATH)
+		self.tokenizer = tokenizer
 		self.categories = ['Canon', 'Droid', 'E63', 'Palm', 'Reference']
 		self.fnames = []
 		self.labels = []
+		if split == 'train':
+			self.transforms = transforms.RandomApply(
+				nn.ModuleList([
+					transforms.GaussianBlur(3, sigma=(0.1, 0.15)),
+					# transforms.RandomVerticalFlip(p=0.5),
+				])
+			)
+		else:
+			self.transforms = nn.Identity()
 
 		for cate in self.categories[:1]:
 			lines = open(
@@ -42,7 +52,13 @@ class PublicDataset(Dataset):
 						os.path.join(self.path, "%s_cropped" %(cate), split[0].replace('_', '._'))
 					)
 					self.labels.append(label)
-
+		idx = int(len(self.fnames) * 0.8)
+		if split == 'train':
+			self.fnames = self.fnames[:idx]
+			self.labels = self.labels[:idx]
+		else:
+			self.fnames = self.fnames[idx:]
+			self.labels = self.labels[idx:]
 	def __getitem__(self, idx):
 		img = plt.imread(self.fnames[idx])
 		label = self.tokenizer.encode(self.labels[idx])
@@ -50,7 +66,8 @@ class PublicDataset(Dataset):
 		new_h, new_w = RecognitionConfig.H, int(w * RecognitionConfig.H / h)
 		img = resize(img, [new_h, new_w])
 
-		return torch.Tensor(img), torch.Tensor(label), new_w, len(label)
+		img = torch.Tensor(np.transpose(img, [2, 0, 1]))
+		return self.transforms(img), torch.Tensor(label).long(), new_w, len(label)
 
 	def __len__(self):
 		return len(self.fnames)
@@ -75,30 +92,35 @@ class PublicDataset(Dataset):
 
 		maxw = max(ws)
 		imgs = [
-			F.pad(img, [0, 0, 0, maxw - img.shape[1]]) for img in imgs
+			F.pad(img, [0, maxw - img.shape[-1]]) for img in imgs
 		]
 		labels = pad_sequence(labels, batch_first=True, padding_value=1)
 
-		return torch.permute(torch.stack(imgs), [0,3,1,2]), labels, np.array(ws), np.array(ls)
+		return torch.stack(imgs), labels, np.array(ws), np.array(ls)
 
+def test_dataset():
+	ds = PublicDataset()
+	for i in range(10):
+		img, label, w, l = ds[i]
+		img = img.detach().numpy()
+		img = np.transpose(img, [1, 2, 0])
+		caption = ds.tokenizer.decode(label)
 
+		plt.imshow(img)
+		plt.title(caption)
+		plt.show()
 
 
 
 if __name__ == '__main__':
-	ds = PublicDataset()
+	# ds = PublicDataset()
 	# dl = DataLoader(ds, batch_size=3, shuffle=True, collate_fn=PublicDataset.collate_fn)
 	# for imgs, labels, ws, ls in dl:
 	# 	print(ls)
 	# 	for label in labels:
 	# 		print(ds.tokenizer.decode(np.array(label).astype(int)))
 	# 	break
-	img, _, _, _ = ds[100]
-	print(img)
-	plt.imshow(
-		(img.detach().numpy() * 255).astype(int)
-	)
-	plt.show()
+	test_dataset()
 
 
 
